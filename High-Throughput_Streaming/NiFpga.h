@@ -1,5 +1,5 @@
 /*
- * FPGA Interface C API 15.0 header file.
+ * FPGA Interface C API 15.0 header file..
  *
  * Copyright (c) 2015,
  * National Instruments Corporation.

@@ -1,5 +1,5 @@
 /**
-* High-Throughput Streaming Example
+* High-Throughput Streaming Example 
 * 
 * This example shows a basic example of Peer-to-Peer DMA transfers between
 * an NI FlexRIO module and a NVIDIA GPU that is capable of NVIDIA GPU Direct
