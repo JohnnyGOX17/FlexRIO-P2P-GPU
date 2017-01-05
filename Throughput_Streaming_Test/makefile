@@ -1,8 +1,8 @@
 CC=nvcc
 CFLAGS=-ldl
 
-test: high-throughput_streaming.cu NiFpga.c
-	$(CC) -o high-throughput_streaming high-throughput_streaming.cu NiFpga.c -ldl
+test: throughput_test.cu NiFpga.c
+	$(CC) -o throughput_test throughput_test.cu NiFpga.c -ldl
 
 clean:
-	rm high-throughput_streaming 
+	rm throughput_test 

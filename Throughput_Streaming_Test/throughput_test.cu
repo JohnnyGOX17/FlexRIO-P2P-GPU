@@ -32,6 +32,32 @@
 typedef uint64_t fifotype;
 
 
+__global__ void inplace_add(unsigned long long *in)
+{
+  extern __shared__ fifotype sdata[];
+
+  // each thread copies an element into shared memory
+  unsigned int tid = threadIdx.x;
+  sdata[tid] = in[tid + blockIdx.x*blockDim.x];
+  __syncthreads();
+
+  // Now each block figures out the sum of shared memory
+  int stride;
+  for (stride=1; stride < blockDim.x; stride *= 2)
+  {
+    int idx = 2*stride*tid;
+    if (idx+stride < blockDim.x)
+      sdata[idx] += sdata[idx+stride];
+
+    __syncthreads();
+  }
+
+  // each block writes out result
+  if (tid == 0)
+    in[blockIdx.x] = sdata[0];
+}
+
+
 int main(int argc, char **argv)
 {
   // initialize NI FPGA interfaces; use status variable for error handling
@@ -53,14 +79,17 @@ int main(int argc, char **argv)
   // Configure P2P FIFO between FlexRIO and GPU using NVIDIA GPU Direct
   CHECKSTAT(NiFpga_ConfigureFifoBuffer(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO, (uint64_t)gpu_mem, NX*NFRAMES, NULL, NiFpga_DmaBufferType_NvidiaGpuDirectRdma)); 
   
-  CHECKSTAT(NiFpga_StartFifo(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO));
+  //CHECKSTAT(NiFpga_StartFifo(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO));
   
   // Setup batch size to be very large
   NiFpga_WriteU64(session, NiFpga_FPGA_main_ControlU64_BatchSize, (long long)NX*(long long)BATCH_NFRAMES+1000);
 
   // Start transferring data
   printf("Transferring Data");
+  // create rising edge start signal
+  NiFpga_WriteBool(session, NiFpga_FPGA_main_ControlBool_StartTransfer, NiFpga_False);
   NiFpga_WriteBool(session, NiFpga_FPGA_main_ControlBool_StartTransfer, NiFpga_True);
+
 
   size_t tot_bytes = 0; // total bytes transferred
   struct timeval start_time;
@@ -74,6 +103,7 @@ int main(int argc, char **argv)
   struct tms start_tms, end_tms;
   times(&start_tms);
 
+  // Process batch frames
   int i;
   for (i=0; i<BATCH_NFRAMES; i++)
   {
@@ -81,11 +111,63 @@ int main(int argc, char **argv)
     tot_bytes += sizeof(fifotype)*(NX);
     CHECKSTAT(NiFpga_AcquireFifoReadElementsU64(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO, &datap, NX, 3000, &elems_acquired, &elems_remaining));
     
+    // Add frame to running count
+    {
 
+      inplace_add<<<CUDA_NBLOCKS,CUDA_NTHREADS,sizeof(fifotype)*CUDA_NTHREADS>>>((unsigned long long *)datap);
+
+      int nresults = CUDA_NBLOCKS;
+      while (nresults > 1)
+      {
+        int n_threads_to_run = (nresults > 1024)?1024:nresults;
+        int n_blocks_to_run  = (nresults > 1024)?nresults/1024:1;
+        inplace_add<<<n_blocks_to_run,n_threads_to_run,sizeof(fifotype)*n_threads_to_run>>>((unsigned long long *)datap);
+        nresults /= 1024;
+      }
+
+      // Find result of add
+      uint64_t framecnt = 0;
+      cudaMemcpy(&framecnt, datap, sizeof(uint64_t), cudaMemcpyDeviceToHost);
+      running_count += framecnt;
+    }
+
+    // Release this frame so FlexRIO can fill it while we process next frame
+    NiFpga_ReleaseFifoElements(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO, elems_acquired);
   
+  }
+
+  printf("Final count (on GPU) is %llu\n", running_count);
+
+  // calculate time taken and data transfer rates
+  struct timeval stop_time;
+  gettimeofday(&stop_time, NULL);
+  int dt = (stop_time.tv_sec - start_time.tv_sec)*1000 + (stop_time.tv_usec - start_time.tv_usec)/1000;
+  if (stop_time.tv_usec < start_time.tv_usec)
+    dt += 1000;
+
+  printf("Read %llu bytes in %d ms (%.2fMB/s)\n", tot_bytes, dt, ((float)tot_bytes)/(float)dt / 1000.0);
+
+  times(&end_tms);
+  int cpu_us = (end_tms.tms_stime + end_tms.tms_cstime - start_tms.tms_stime - start_tms.tms_cstime + end_tms.tms_utime + end_tms.tms_cutime - start_tms.tms_utime - start_tms.tms_cutime)*1000000/CLOCKS_PER_SEC;
+
+  printf("%d usertime to %.2f us/frame\n", cpu_us, (float)cpu_us / BATCH_NFRAMES);
+
+  // Recompute final sum count locally to verify data integrity
+  uint64_t checksum = 0;
+  uint64_t j = 0;
+  for (j=0; j<(long long)NX*(long long)BATCH_NFRAMES; j++)
+  {
+    checksum +=j;
+  }
+
+  printf("Final checksum on CPU: %llu\n", checksum);
+  if (checksum != running_count)
+    printf("*** WARNING: FINAL COUNT DOES NOT MATCH CHECKSUM.\n");
+  
+
   // Close NI FPGA References; must be last NiFpga calls
   printf("Stopping NI FPGA...\n");
-  CHECKSTAT(NiFpga_StopFifo(session, NiFpga_HighThroughputStreamingFPGAPXIe797xR_TargetToHostFifoI16_InputFIFO));
+  CHECKSTAT(NiFpga_StopFifo(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO));
   CHECKSTAT(NiFpga_Close(session, 0));
   CHECKSTAT(NiFpga_Finalize());
 
