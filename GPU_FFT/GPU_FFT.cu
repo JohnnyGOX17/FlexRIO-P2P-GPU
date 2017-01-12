@@ -24,49 +24,84 @@
 #include <math.h>
 #include <sys/time.h>
 #include <sys/times.h>
+#include <ctype.h>
+#include <unistd.h>
 
 // includes- project
 #include <cuda_runtime.h>
 #include <cufft.h>
 #include <cufftXt.h>
-#include "NiFpga_FPGA_Main.h"
+#include "GPU_FFT.h"
 
-#define NX              256 // FFT transform size
-#define NFRAMES         3
-#define BATCH_NFRAMES   1000
-#define CUDA_NTHREADS   1024
-#define CUDA_NBLOCKS    (NX/CUDA_NTHREADS)
-
-#define SAMPLES         1000 // number of samples to get
-
-// use inline definition for error checking to allow easy app exit
-#define CHECKSTAT(stat) if (stat != 0) { printf("%d: Error: %d\n", __LINE__, stat); return 1; }
-
-// keep datatypes uniform between FIFOs and operations
-typedef int32_t         fifotype;
-
-// define data type as complex as we are doing an in-place real-to-complex FFT
-typedef cuComplex       cufftComplex;
-                                        
 
 int main(int argc, char **argv)
 {
 
+  /*
+   * Initialization of program values, NI FPGA and CUDA
+  */
+
+  // program flag declrarations
+  int viahostflag = 0;  // -H, do transfers and operations via host
+  int lpfflag = 0;      // -l, pass signal through Low-Pass FIR on FlexRIO
+  int awgnflag = 0;     // -a, add white gaussian noise to signal on FlexRIO
+  int c;
+
+  // Process command line arguments and set above flags
+  while ((c = getopt(argc, argv, "Hla")) != -1)
+  {
+    switch (c)
+    {
+      case 'H':
+        viahostflag = 1;
+        break;
+      case 'l':
+        lpfflag = 1;
+        break;
+      case 'a':
+        awgnflag = 1;
+        break;
+      default:
+        abort();
+    }
+  }
+
+
   // initialize NI FPGA interfaces; use status variable for error handling
-  printf("Initializing NI FPGA...\n");
+  printf("Initializing NI FPGA: ");
   CHECKSTAT(NiFpga_Initialize());
   NiFpga_Session session;
   
   // Download bitfile to target; get path to bitfile
   // TODO: change to full path to bitfile as necessary
+  printf("Downloading bitfile ");
   CHECKSTAT(NiFpga_Open("/home/nitest/FlexRIO-P2P-GPU/GPU_FFT/NiFpga_FPGA_Main.lvbitx", NiFpga_FPGA_Main_Signature, "RIO0", 0, &session));
+  printf("DONE\n");
   
+  struct cudaDeviceProp d_props;
+  int device = 0; //TODO: modify to take stdin for multiple GPUs
+  checkCudaErrors(cudaGetDevice(&device));
+  checkCudaErrors(cudaGetDeviceProperties(&d_props, device));
+  if (d_props.major < 2)
+  {
+    printf("CUDA Error: This example requires a CUDA device with architecture SM2.0 or higher\n");
+    exit(EXIT_FAILURE);
+  }
+
   // Allocate CUDA Memory for FFT and log scaling operations
-  printf("Allocating CUDA Memory: ");
-  cufftComplex *gpu_mem;
-  if (cudaMalloc((void**)&gpu_mem, sizeof(cufftComplex)*(NX/2+1)) != CUFFT_SUCCESS)
+  // As well, allocate complex CUDA Memory for R2C result
+  printf("Allocating CUDA and Host Memory: \n");
+  cufftComplex *gpu_mem;        // ptr for CUDA Device Memory
+  cufftComplex *hcomp_data;     // ptr for host memory to recieve complex data
+  if (cudaMalloc((void**)&gpu_mem, sizeof(cufftComplex)*NX) != cudaSuccess)
   {
     printf("CUDA Error: Failed to allocate memory on device\n");
+    return -1;
+  }
+  hcomp_data = (cufftComplex*) malloc(sizeof(cufftComplex)*SAMPLES);
+  if (hcomp_data == NULL)
+  {
+    printf("Host Error: Host failed to allocate memory\n");
     return -1;
   }
 
@@ -81,7 +116,8 @@ int main(int argc, char **argv)
   // Configure P2P FIFO between FlexRIO and GPU using NVIDIA GPU Direct
   // CHECKSTAT(NiFpga_ConfigureFifoBuffer(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, (uint64_t)gpu_mem, NX*NFRAMES, NULL, NiFpga_DmaBufferType_NvidiaGpuDirectRdma)); 
   
-  CHECKSTAT(NiFpga_ConfigureFifo(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, (size_t)10*SAMPLES));
+  if (viahostflag == 1)
+    CHECKSTAT(NiFpga_ConfigureFifo(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, (size_t)10*SAMPLES));
   
   // Set RMS Noise value of AWGN Algorithm on FlexRIO (out of i16 full scale)
   NiFpga_WriteU16(session, NiFpga_FPGA_Main_ControlU16_RMSNoise, 2048);
@@ -89,19 +125,76 @@ int main(int argc, char **argv)
   // Reset FPGA algorithms and clear FIFOs 
   NiFpga_WriteBool(session, NiFpga_FPGA_Main_ControlBool_aReset, NiFpga_True);
   NiFpga_WriteBool(session, NiFpga_FPGA_Main_ControlBool_aReset, NiFpga_False);
+  if (lpfflag == 1)
+  {
+    printf("Enabling Low-Pass FIR Filter on FlexRIO\n");
+    NiFpga_WriteBool(session, NiFpga_FPGA_Main_ControlBool_LPFEnable, NiFpga_True);
+  }
+  if (awgnflag == 1)
+  {
+    printf("Adding White Gaussian Noise to Signal\n");
+    NiFpga_WriteBool(session, NiFpga_FPGA_Main_ControlBool_AWGNEnable, NiFpga_True);
+  }
 
-  int32_t data [SAMPLES];
-  CHECKSTAT(NiFpga_ReadFifoI32(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, data, (size_t)SAMPLES, 5000, NULL));
+  
+  /*
+   * DMA (or copy from host) signal to GPU and execute FFT plan
+   */
+  if (viahostflag == 1)
+  {
+    printf("Copy host memory signal to CUDA Device\n");
+    int32_t h_data [SAMPLES];
+    CHECKSTAT(NiFpga_ReadFifoI32(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, h_data, (size_t)SAMPLES, 5000, NULL));
 
-  // write data to file
+    if (cudaMemcpy((cufftReal*)gpu_mem, h_data, SAMPLES, cudaMemcpyHostToDevice) != cudaSuccess)
+    {
+      printf("CUDA Error: Device failed to copy host memory to device\n");
+      return -1;
+    }
+  }
+  
+  // Execute FFT
+  printf("Executing CUFFT Plan...\n");
+  if (cufftExecR2C(plan, (cufftReal*)gpu_mem, gpu_mem) != CUFFT_SUCCESS) 
+  {
+    printf("CUFFT Error: Execution of FFT Plan failed\n");
+    return -1;
+  }
+
+  // Sync and wait for completion
+  if (cudaDeviceSynchronize() != cudaSuccess)
+  {
+    printf("CUDA Error: Device failed to synchronize\n");
+    return -1;
+  }
+
+  // Copy FFT result back to host)
+  printf("Copying CUFFT result back to host memory...\n");
+  if (cudaMemcpy(hcomp_data, gpu_mem, SAMPLES, cudaMemcpyDeviceToHost) != cudaSuccess)
+  {
+    printf("CUDA Error: Device failed to copy data back to host memory\n");
+    return -1;
+  }
+
+
+  /* 
+   * Write resulting data to file
+   */
+  printf("Writing signal to SimSignal.dat\n");
   FILE *f = fopen("SimSignal.dat", "w");
-  for(int i=0; i<1000; i++)
+  for(int i=0; i<SAMPLES; i++)
   {
     if (i==0)
       fprintf(f, "# X Y\n");
-    fprintf(f, "%d %d\n", i, data[i]);
+    // Write real component to file
+    fprintf(f, "%d %d\n", i, hcomp_data[i].x);
   }
   fclose(f);
+
+  // Close out CUFFT plan(s) and free CUDA memory
+  printf("Closing CUFFT and freeing CUDA memory...\n");
+  cufftDestroy(plan);
+  cudaFree(gpu_mem);
 
   // Close NI FPGA References; must be last NiFpga calls
   printf("Stopping NI FPGA...\n");
