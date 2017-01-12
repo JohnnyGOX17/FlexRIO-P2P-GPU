@@ -6,3 +6,4 @@ test: GPU_FFT.cu NiFpga.c
 
 clean:
 	rm GPU_FFT 
+	rm SimSignal.dat
