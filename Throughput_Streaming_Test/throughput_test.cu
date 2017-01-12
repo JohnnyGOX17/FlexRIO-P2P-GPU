@@ -60,6 +60,7 @@ __global__ void inplace_add(unsigned long long *in)
 
 int main(int argc, char **argv)
 {
+
   // initialize NI FPGA interfaces; use status variable for error handling
   printf("Initializing NI FPGA...\n");
   CHECKSTAT(NiFpga_Initialize());
@@ -164,6 +165,7 @@ int main(int argc, char **argv)
   if (checksum != running_count)
     printf("*** WARNING: FINAL COUNT DOES NOT MATCH CHECKSUM.\n");
   
+  cudaFree(gpu_mem);
 
   // Close NI FPGA References; must be last NiFpga calls
   printf("Stopping NI FPGA...\n");
