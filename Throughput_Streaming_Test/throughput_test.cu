@@ -32,6 +32,10 @@
 typedef uint64_t fifotype;
 
 
+/*
+ * Custom Kernel Functions
+ */
+// simple add to match addition running on FlexRIO FPGA
 __global__ void inplace_add(unsigned long long *in)
 {
   extern __shared__ fifotype sdata[];
@@ -57,25 +61,37 @@ __global__ void inplace_add(unsigned long long *in)
     in[blockIdx.x] = sdata[0];
 }
 
+// Spinner for command-line prompt
+char sp[] = "/-\\|";
+int spi=0;
+char spin()
+{
+  if (spi >= 3)
+    spi=0;
+  else
+    spi++;
+  return sp[spi];
+}
 
 int main(int argc, char **argv)
 {
 
   // initialize NI FPGA interfaces; use status variable for error handling
-  printf("Initializing NI FPGA...\n");
+  printf("Initializing NI FPGA: Downloading bitfile");
   CHECKSTAT(NiFpga_Initialize());
   NiFpga_Session session;
   
   // Download bitfile to target; get path to bitfile
   // TODO: change to full path to bitfile as necessary
   CHECKSTAT(NiFpga_Open("/home/nitest/FlexRIO-P2P-GPU/Throughput_Streaming_Test/NiFpga_FPGA_main.lvbitx", NiFpga_FPGA_main_Signature, "RIO0", 0, &session));
-  
+  printf(" DONE\n");
+
   // Allocate CUDA memory; the CUDA device will operate on frames of samples so
   // we willl allocate two frames worth of space 
-  printf("Allocating CUDA Memory: ");
+  printf("Allocating CUDA Memory ");
   fifotype *gpu_mem;
   cudaError_t cuerr = cudaMalloc(&gpu_mem, sizeof(fifotype)*NX*NFRAMES);
-  printf("%p\n", gpu_mem);
+  printf("at %p\n", gpu_mem);
 
   // Configure P2P FIFO between FlexRIO and GPU using NVIDIA GPU Direct
   CHECKSTAT(NiFpga_ConfigureFifoBuffer(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO, (uint64_t)gpu_mem, NX*NFRAMES, NULL, NiFpga_DmaBufferType_NvidiaGpuDirectRdma)); 
@@ -86,7 +102,6 @@ int main(int argc, char **argv)
   NiFpga_WriteU64(session, NiFpga_FPGA_main_ControlU64_BatchSize, (long long)NX*(long long)BATCH_NFRAMES+1000);
 
   // Start transferring data
-  printf("Transferring Data");
   // create rising edge start signal
   NiFpga_WriteBool(session, NiFpga_FPGA_main_ControlBool_StartTransfer, NiFpga_False);
   NiFpga_WriteBool(session, NiFpga_FPGA_main_ControlBool_StartTransfer, NiFpga_True);
@@ -108,6 +123,8 @@ int main(int argc, char **argv)
   int i;
   for (i=0; i<BATCH_NFRAMES; i++)
   {
+    //output spinner
+    printf("\rTransferring Data %c", spin()); 
     // Acquire data from FlexRIO -> GPU
     tot_bytes += sizeof(fifotype)*(NX);
     CHECKSTAT(NiFpga_AcquireFifoReadElementsU64(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO, &datap, NX, 3000, &elems_acquired, &elems_remaining));
@@ -137,7 +154,7 @@ int main(int argc, char **argv)
   
   }
 
-  printf("Final count (on GPU) is %llu\n", running_count);
+  printf("\b\nFinal count (on GPU) is %llu\n", running_count);
 
   // calculate time taken and data transfer rates
   struct timeval stop_time;
@@ -164,6 +181,8 @@ int main(int argc, char **argv)
   printf("Final checksum on CPU: %llu\n", checksum);
   if (checksum != running_count)
     printf("*** WARNING: FINAL COUNT DOES NOT MATCH CHECKSUM.\n");
+  else
+    printf("Success! Checksums on CPU and GPU match\n");
   
   cudaFree(gpu_mem);
 

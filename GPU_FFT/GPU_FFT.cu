@@ -93,7 +93,7 @@ int main(int argc, char **argv)
   int c;
 
   // Process command line arguments and set above flags
-  while ((c = getopt(argc, argv, "Hlat")) != -1)
+  while ((c = getopt(argc, argv, "Hlath")) != -1)
   {
     switch (c)
     {
@@ -109,6 +109,9 @@ int main(int argc, char **argv)
       case 't':
         timeflag = 1;
         break;
+      case 'h':
+        printf(HELP_STRING);
+        exit(0);
       default:
         abort();
     }
@@ -173,10 +176,14 @@ int main(int argc, char **argv)
   checkCudaErrors(cufftMakePlanMany(plan, 1, &signalsize, 0,0,0,0,0,0, CUFFT_R2C, BATCH_SIZE, &workSize));
 
   // Configure P2P FIFO between FlexRIO and GPU using NVIDIA GPU Direct
-  // CHECKSTAT(NiFpga_ConfigureFifoBuffer(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, (uint64_t)gpu_mem, NX*NFRAMES, NULL, NiFpga_DmaBufferType_NvidiaGpuDirectRdma)); 
-  
   if (viahostflag == 1)
+  {
     CHECKSTAT(NiFpga_ConfigureFifo(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, (size_t)BATCH_SIZE*SAMPLES));
+  }
+  else
+  {
+    CHECKSTAT(NiFpga_ConfigureFifoBuffer(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, (uint64_t)init_signal, SAMPLES*BATCH_SIZE, NULL, NiFpga_DmaBufferType_NvidiaGpuDirectRdma));
+  }
   
   /*
    * Set NI FPGA Control/Indicator Values
@@ -225,8 +232,14 @@ int main(int argc, char **argv)
     if (cudaMemcpy(init_signal, h_data, SAMPLES, cudaMemcpyHostToDevice) != cudaSuccess)
     {
       printf("CUDA Error: Device failed to copy host memory to device\n");
-      return -1;
+      return -1; 
     }
+  }
+  else
+  {
+    printf("DMA'ing FlexRIO data to GPU\n");
+    size_t elemsAcquired, elemsRemaining;
+    CHECKSTAT(NiFpga_AcquireFifoReadElementsI32(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, &init_signal, SAMPLES*BATCH_SIZE, 5000, &elemsAcquired, &elemsRemaining));
   }
   
   dim3 block(TILE_DIM, BLOCK_ROWS);
@@ -241,8 +254,18 @@ int main(int argc, char **argv)
   }
   checkCudaErrors(cudaMemcpy(rfilter, tempfilter, COMPLEX_SIZE, cudaMemcpyHostToDevice));
 
-  // Execute FFT
+  /*
+   * Start FFT on GPU  
+   */
   printf("Executing CUFFT Plan...\n");
+
+  // create timers
+  cudaEvent_t start, end;
+  cudaEventCreate(&start);
+  cudaEventCreate(&end);
+  float elapsedTime=0;
+
+  checkCudaErrors(cudaEventRecord(start, 0));
 
   for(int i=0; i<ITERATIONS; i++)
   {
@@ -258,8 +281,13 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaGetLastError());
   }
 
+  // Stop and record time taken
+  checkCudaErrors(cudaEventRecord(end, 0));
   // Sync and wait for completion
   checkCudaErrors(cudaDeviceSynchronize());
+  checkCudaErrors(cudaEventSynchronize(end));
+  checkCudaErrors(cudaEventElapsedTime(&elapsedTime, start, end));
+  printf("FFT took %fms to complete on GPU\n", elapsedTime);
 
   // Copy FFT result back to host)
   printf("Copying CUFFT result back to host memory...\n");
@@ -276,6 +304,7 @@ int main(int argc, char **argv)
     if (i==0)
       fprintf(f, "# X Y\n");
     // Write real component to file
+    // TODO: Implement power conversion to CUFFT Callback
     fprintf(f, "%d %f\n", i, 20.0f*log(hcomp_data[i].y));
   }
   fclose(f);
@@ -296,7 +325,8 @@ int main(int argc, char **argv)
 
   // Close NI FPGA References; must be last NiFpga calls
   printf("Stopping NI FPGA...\n");
-  CHECKSTAT(NiFpga_StopFifo(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO));
+  // Commented out- since we destroyed link to CUDA, we need not stop the FIFO
+  //CHECKSTAT(NiFpga_StopFifo(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO));
   CHECKSTAT(NiFpga_Close(session, 0));
   CHECKSTAT(NiFpga_Finalize());
 

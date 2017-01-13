@@ -45,4 +45,6 @@ __device__ __host__ inline cufftComplex ComplexMul(cufftComplex a, cufftComplex 
   return c;
 }
 
+#define HELP_STRING "Usage: GPU_FFT [OPTIONS]\nGPU FFT Example with NI FlexRIO device\n\n\t-H,\tTransfer data from FPGA to host memory before transferring to GPU\n\t-l,\tPass simulated signal through digital Low-Pass FIR Filter on FPGA\n\t-a,\tAdd White Gaussian Noise to simulated signal on FPGA\n\t-t,\tWrite generated time-domain signal from FlexRIO to file (must be used with -H option)\n"
+
 #endif // GPU_FFT_H_
