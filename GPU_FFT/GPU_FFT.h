@@ -8,9 +8,10 @@
 
 #include "NiFpga_FPGA_Main.h"   // NI FPGA C API Generated .h file for bitfile
 
-#define NX              256     // FFT transform size
-#define BATCH_SIZE      1000    // # of batches to run
-#define SAMPLES         1000    // number of samples to get
+#define SAMPLES         10000   // number of samples to get
+#define NX              SAMPLES // FFT transform size
+#define BATCH_SIZE      10      // # of batches to run
+#define ITERATIONS      100
 #define COMPLEX_SIZE    (SAMPLES/2 + 1)
  
 // use inline definition for error checking to allow easy app exit
@@ -34,6 +35,14 @@ inline void __checkCudaErrors__(T code, const char *func, const char *file, int 
     cudaDeviceReset();
     exit(EXIT_FAILURE);
   }
+}
+
+__device__ __host__ inline cufftComplex ComplexMul(cufftComplex a, cufftComplex b)
+{
+  cufftComplex c;
+  c.x = a.x * b.x - a.y * b.y;
+  c.y = a.x * b.y + a.y * b.x;
+  return c;
 }
 
 #endif // GPU_FFT_H_

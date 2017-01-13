@@ -148,14 +148,14 @@ int main(int argc, char **argv)
   cufftComplex *hcomp_data;     // Where host memory will recieve complex data result
   cufftComplex *rfilter;        // Filter memory space
 
-  checkCudaErrors(cudaMalloc((void **)&init_signal, sizeof(int32_t)*SAMPLES*BATCH_SIZE));
-  checkCudaErrors(cudaMalloc((void **)&tmp_result1, sizeof(cufftReal)*SAMPLES*BATCH_SIZE));
-  checkCudaErrors(cudaMalloc((void **)&tmp_result2, sizeof(cufftComplex)*SAMPLES*BATCH_SIZE));
-  checkCudaErrors(cudaMalloc((void **)&gpu_result, sizeof(cufftComplex)*COMPLEX_SIZE*BATCH_SIZE));
+  checkCudaErrors(cudaMalloc((void **)&init_signal, sizeof(int32_t)*SAMPLES));
+  checkCudaErrors(cudaMalloc((void **)&tmp_result1, sizeof(cufftReal)*SAMPLES));
+  checkCudaErrors(cudaMalloc((void **)&tmp_result2, sizeof(cufftComplex)*SAMPLES));
+  checkCudaErrors(cudaMalloc((void **)&gpu_result, sizeof(cufftComplex)*COMPLEX_SIZE));
   checkCudaErrors(cudaMalloc((void **)&rfilter, sizeof(cufftComplex)*COMPLEX_SIZE));
   cufftComplex * tempfilter = (cufftComplex*) malloc(sizeof(cufftComplex)*COMPLEX_SIZE);
 
-  hcomp_data = (cufftComplex*) malloc(sizeof(cufftComplex)*COMPLEX_SIZE*BATCH_SIZE);
+  hcomp_data = (cufftComplex*) malloc(sizeof(cufftComplex)*COMPLEX_SIZE);
   if (hcomp_data == NULL)
   {
     printf("Host Error: Host failed to allocate memory\n");
@@ -167,16 +167,13 @@ int main(int argc, char **argv)
    * also link data path to CUDA device
    */
   cufftHandle plan;
-  size_t workSize;
-  checkCudaErrors(cufftCreate(&plan));
-  int signalsize = SAMPLES;
-  checkCudaErrors(cufftMakePlanMany(plan, 1, &signalsize, 0,0,0,0,0,0, CUFFT_R2C, BATCH_SIZE, &workSize));
+  checkCudaErrors(cufftPlan1d(&plan, NX, CUFFT_R2C, 1));
 
   // Configure P2P FIFO between FlexRIO and GPU using NVIDIA GPU Direct
   // CHECKSTAT(NiFpga_ConfigureFifoBuffer(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, (uint64_t)gpu_mem, NX*NFRAMES, NULL, NiFpga_DmaBufferType_NvidiaGpuDirectRdma)); 
   
   if (viahostflag == 1)
-    CHECKSTAT(NiFpga_ConfigureFifo(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, (size_t)BATCH_SIZE*SAMPLES));
+    CHECKSTAT(NiFpga_ConfigureFifo(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, (size_t)10*SAMPLES));
   
   /*
    * Set NI FPGA Control/Indicator Values
@@ -241,22 +238,18 @@ int main(int argc, char **argv)
   }
   checkCudaErrors(cudaMemcpy(rfilter, tempfilter, COMPLEX_SIZE, cudaMemcpyHostToDevice));
 
+  // Transform input data using our customer kernel
+  ConvertInputToComplex<<<32, 128>>>(init_signal, tmp_result1);
+  checkCudaErrors(cudaGetLastError());
+
   // Execute FFT
   printf("Executing CUFFT Plan...\n");
+  checkCudaErrors(cufftExecR2C(plan, tmp_result1, tmp_result2));
+  checkCudaErrors(cudaGetLastError());
 
-  for(int i=0; i<ITERATIONS; i++)
-  {
-    // Transform input data using our customer kernel
-    ConvertInputToComplex<<<32, 128>>>(init_signal, tmp_result1);
-    checkCudaErrors(cudaGetLastError());
-
-    //TODO: replace with tmp_result2 for convolution
-    checkCudaErrors(cufftExecR2C(plan, tmp_result1, gpu_result));
-
-    // Convolve FFT output data
-    //ConvolveAndTranspose<<<grid, block>>>(tmp_result2, gpu_result, rfilter);
-    checkCudaErrors(cudaGetLastError());
-  }
+  // Convolve FFT output data
+  ConvolveAndTranspose<<<grid, block>>>(tmp_result2, gpu_result, rfilter);
+  checkCudaErrors(cudaGetLastError());
 
   // Sync and wait for completion
   checkCudaErrors(cudaDeviceSynchronize());
@@ -276,7 +269,7 @@ int main(int argc, char **argv)
     if (i==0)
       fprintf(f, "# X Y\n");
     // Write real component to file
-    fprintf(f, "%d %f\n", i, 20.0f*log(hcomp_data[i].y));
+    fprintf(f, "%d %d\n", i, 20*log(hcomp_data[i].y));
   }
   fclose(f);
 
