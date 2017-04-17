@@ -1,12 +1,12 @@
 /**
-* High-Throughput Streaming Example 
-* 
+* High-Throughput Streaming Example
+*
 * This example shows a basic example of Peer-to-Peer DMA transfers between
 * an NI FlexRIO module and a NVIDIA GPU that is capable of NVIDIA GPU Direct
 * technology. This example will measure throughput between the two devices and
 * report the measurement back to the user.
 *
-* For more information on NI FPGA functions, see the NI FPGA Interface C API 
+* For more information on NI FPGA functions, see the NI FPGA Interface C API
 * Help. For more information on NVIDIA CUDA functions and operation, see the
 * help files included with the NVIDIA CUDA Driver.
 *
@@ -80,24 +80,24 @@ int main(int argc, char **argv)
   printf("Initializing NI FPGA: Downloading bitfile");
   CHECKSTAT(NiFpga_Initialize());
   NiFpga_Session session;
-  
+
   // Download bitfile to target; get path to bitfile
   // TODO: change to full path to bitfile as necessary
   CHECKSTAT(NiFpga_Open("/home/nitest/FlexRIO-P2P-GPU/Throughput_Streaming_Test/NiFpga_FPGA_main.lvbitx", NiFpga_FPGA_main_Signature, "RIO0", 0, &session));
   printf(" DONE\n");
 
   // Allocate CUDA memory; the CUDA device will operate on frames of samples so
-  // we willl allocate two frames worth of space 
+  // we willl allocate two frames worth of space
   printf("Allocating CUDA Memory ");
   fifotype *gpu_mem;
   cudaError_t cuerr = cudaMalloc(&gpu_mem, sizeof(fifotype)*NX*NFRAMES);
   printf("at %p\n", gpu_mem);
 
   // Configure P2P FIFO between FlexRIO and GPU using NVIDIA GPU Direct
-  CHECKSTAT(NiFpga_ConfigureFifoBuffer(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO, (uint64_t)gpu_mem, NX*NFRAMES, NULL, NiFpga_DmaBufferType_NvidiaGpuDirectRdma)); 
-  
+  CHECKSTAT(NiFpga_ConfigureFifoBuffer(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO, (uint64_t)gpu_mem, NX*NFRAMES, NULL, NiFpga_DmaBufferType_NvidiaGpuDirectRdma));
+
   //CHECKSTAT(NiFpga_StartFifo(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO));
-  
+
   // Setup batch size to be very large
   NiFpga_WriteU64(session, NiFpga_FPGA_main_ControlU64_BatchSize, (long long)NX*(long long)BATCH_NFRAMES+1000);
 
@@ -124,11 +124,11 @@ int main(int argc, char **argv)
   for (i=0; i<BATCH_NFRAMES; i++)
   {
     //output spinner
-    printf("\rTransferring Data %c", spin()); 
+    printf("\rTransferring Data %c", spin());
     // Acquire data from FlexRIO -> GPU
     tot_bytes += sizeof(fifotype)*(NX);
     CHECKSTAT(NiFpga_AcquireFifoReadElementsU64(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO, &datap, NX, 3000, &elems_acquired, &elems_remaining));
-    
+
     // Add frame to running count
     {
 
@@ -151,7 +151,7 @@ int main(int argc, char **argv)
 
     // Release this frame so FlexRIO can fill it while we process next frame
     NiFpga_ReleaseFifoElements(session, NiFpga_FPGA_main_TargetToHostFifoU64_FlexRIO_FIFO, elems_acquired);
-  
+
   }
 
   printf("\b\nFinal count (on GPU) is %llu\n", running_count);
@@ -183,7 +183,7 @@ int main(int argc, char **argv)
     printf("*** WARNING: FINAL COUNT DOES NOT MATCH CHECKSUM.\n");
   else
     printf("Success! Checksums on CPU and GPU match\n");
-  
+
   cudaFree(gpu_mem);
 
   // Close NI FPGA References; must be last NiFpga calls
