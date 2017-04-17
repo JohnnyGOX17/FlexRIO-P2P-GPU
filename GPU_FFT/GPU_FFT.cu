@@ -36,8 +36,15 @@
 #define SAMPLES         1048576
 #define COMPLEX_SIZE    (SAMPLES*2 + 1)
 
-// use inline definition for error checking to allow easy app exit
-#define CHECKSTAT(stat) if (stat != 0) { printf("%d: Error: %d\n", __LINE__, stat); return 1; }
+// use inline method for error checking to allow easy app exit
+inline void CHECKSTAT(int32_t stat)
+{
+  if (stat != 0) {
+    printf("%d: Error: %d\n", __LINE__, stat);
+    exit(EXIT_FAILURE);
+  }
+  return;
+}
 
 #define checkCudaErrors(val) __checkCudaErrors__ ( (val), #val, __FILE__, __LINE__ )
 
