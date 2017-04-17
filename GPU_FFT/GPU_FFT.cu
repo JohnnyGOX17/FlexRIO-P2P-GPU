@@ -242,7 +242,7 @@ int main(int argc, char **argv)
     CHECKSTAT(NiFpga_AcquireFifoReadElementsI32(session,
           NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, &init_signal,
           SAMPLES, 5000, &elemsAcquired, &elemsRemaining));
-    printf("%d samples acquired with %d elements remaining in FIFO/n", elemsAcquired, elemsRemaining);
+    printf("%d samples acquired with %d elements remaining in FIFO\n", elemsAcquired, elemsRemaining);
   }
 
   /*
@@ -283,7 +283,7 @@ int main(int argc, char **argv)
    * Write resulting data to file
    */
   printf("Writing signal to SimSignal.dat\n");
-  FILE *f = fopen("SimSignal.dat", "w");
+  FILE *f = fopen("./plot/SimSignal.dat", "w");
   for(int32_t i=0; i<COMPLEX_SIZE; i++)
   {
     if (i==0)
@@ -297,11 +297,6 @@ int main(int argc, char **argv)
   // Close out CUFFT plan(s) and free CUDA memory
   printf("Closing CUFFT and freeing CUDA memory...\n");
   checkCudaErrors(cufftDestroy(plan));
-
-  // Commented out- since we destroyed link to CUDA, we need not stop the FIFO
-  //CHECKSTAT(NiFpga_ReleaseFifoElements(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO, SAMPLES));
-  //CHECKSTAT(NiFpga_StopFifo(session, NiFpga_FPGA_Main_TargetToHostFifoI32_T2HDMAFIFO));
-
   checkCudaErrors(cudaFree(init_signal));
   checkCudaErrors(cudaFree(tmp_result1));
   checkCudaErrors(cudaFree(gpu_result));

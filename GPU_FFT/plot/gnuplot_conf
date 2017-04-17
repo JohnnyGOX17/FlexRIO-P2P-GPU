@@ -1,0 +1,5 @@
+# GNUPlot configuration for plotting to 'spectrum.png' file
+set terminal png
+set output 'spectrum.png'
+set title "Signal Spectrum"
+plot "SimSignal.dat" using 1:2 with lines

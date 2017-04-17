@@ -14,4 +14,5 @@ GPU_FFT: GPU_FFT.cu NiFpga.c
 
 clean:
 	rm GPU_FFT 
-	rm SimSignal.dat
+	rm ./plot/SimSignal.dat
+	rm ./plot/spectrum.png
