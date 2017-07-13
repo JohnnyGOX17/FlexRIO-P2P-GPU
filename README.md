@@ -7,7 +7,15 @@ NI FlexRIO Driver and example code for implementing peer-to-peer (P2P) data stre
 
 ## Contents
 
-* [Getting Started](#Getting-Started)
+* [About](#about)
+    - [Why GPUs?](#why-gpus)
+    - [What's CUDA?](#whats-cuda)
+* [Development Flow](#development-flow)
+* [Getting Started](#getting-started--installation)
+    - [Hardware Prerequisites](#hardware-prerequisites)
+    - [Software Prerequisites](#software-prerequisites)
+    - [Installation](#installation)
+* [Aditional References](#aditional-references)
 
 ## About
 
