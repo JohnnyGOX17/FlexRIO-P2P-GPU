@@ -15,9 +15,18 @@
 */
 
 #include <stdio.h>
+#include <unistd.h>
 #include <sys/time.h>
 #include <sys/times.h>
 #include "NiFpga_FPGA_main.h"
+
+#define MAX_STR_LEN     256
+#define HELP_STRING \
+  "Usage: throughput_test [OPTIONS]\n\n" \
+  "\t-h,\tDisplay help string\n" \
+  "\t-b [./bitfile],\tPath to *.lvbitx bitfile\n" \
+  "\t-s [signature],\tSignature of the bitfile\n" \
+  "\t-r [RIO0],\tRIO resource string to open (e.g. RIO0 or rio://mysystem/RIO)\n"
 
 // use inline method for error checking to allow easy app exit
 inline void CHECKSTAT(int32_t stat)
@@ -81,6 +90,36 @@ char spin()
 
 int main(int argc, char **argv)
 {
+  /*
+  * Initialization of values passed to NI FPGA
+  */
+  int opt;
+  char bitPath [MAX_STR_LEN],   // -b [./bitfile], path to *.lvbitx bitfile
+       bitSig [MAX_STR_LEN],    // -s [signature], signature of the bitfile
+       rioDev [MAX_STR_LEN];    // -r [RIO0], RIO resource string to open (e.g. RIO0 or rio://mysystem/RIO)
+
+  // Process command line arguments and set above flags
+  while ((opt = getopt(argc, argv, "hb:s:r:")) != -1)
+  {
+    switch (opt)
+    {
+      case 'h':
+        printf(HELP_STRING);
+        exit(EXIT_SUCCESS);
+      case 'b':
+        strcpy(bitPath, optarg);
+        break;
+      case 's':
+        strcpy(bitSig, optarg);
+        break;
+      case 'r':
+        strcpy(rioDev, optarg);
+        break;
+      default:
+        break;
+    }
+  }
+
   // initialize NI FPGA interfaces; use status variable for error handling
   printf("Initializing NI FPGA: Downloading bitfile");
   CHECKSTAT(NiFpga_Initialize());
@@ -88,8 +127,7 @@ int main(int argc, char **argv)
 
   // Download bitfile to target; get path to bitfile
   // TODO: change to full path to bitfile as necessary
-  CHECKSTAT(NiFpga_Open("/home/nitest/FlexRIO-P2P-GPU/Throughput_Streaming_Test/NiFpga_FPGA_main.lvbitx",
-        NiFpga_FPGA_main_Signature, "RIO0", 0, &session));
+  CHECKSTAT(NiFpga_Open(bitPath, bitSig, rioDev, 0, &session));
   printf(" DONE\n");
 
   // Allocate CUDA memory
